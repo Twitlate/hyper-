@@ -1,0 +1,14 @@
+<resources>
+    <style name="Theme.DepthMask" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#E94560</item>
+        <item name="colorPrimaryVariant">#C81E45</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorSecondary">#533483</item>
+        <item name="colorSecondaryVariant">#3F2467</item>
+        <item name="colorOnSecondary">#FFFFFF</item>
+        <item name="android:statusBarColor">#16213E</item>
+        <item name="android:navigationBarColor">#16213E</item>
+        <item name="windowActionBar">false</item>
+        <item name="windowNoTitle">true</item>
+    </style>
+</resources>

@@ -4,15 +4,8 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.ImageDecoder
-import android.graphics.Matrix
-import android.graphics.Paint
-import android.graphics.PorterDuff
-import android.graphics.PorterDuffXfermode
-import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -26,8 +19,6 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.depthmask.app.databinding.ActivityMainBinding
 import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.subject.SegmentationMask
-import com.google.mlkit.vision.subject.Subject
 import com.google.mlkit.vision.subject.SubjectSegmentation
 import com.google.mlkit.vision.subject.SubjectSegmenterOptions
 import kotlinx.coroutines.Dispatchers
@@ -39,7 +30,7 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private var selectedBitmap: Bitmap? = null
-    private var segmentationResult: SegmentationMask? = null
+    private var maskBitmap: Bitmap? = null
 
     private val pickImageLauncher = registerForActivityResult(
         ActivityResultContracts.GetContent()
@@ -102,15 +93,14 @@ class MainActivity : AppCompatActivity() {
 
         binding.btnEditMask.setOnClickListener {
             selectedBitmap?.let { bitmap ->
-                segmentationResult?.let { mask ->
+                maskBitmap?.let { mask ->
                     val intent = Intent(this, MaskEditorActivity::class.java).apply {
                         putExtra("bitmap_uri", saveBitmapTemp(bitmap))
-                        putExtra("mask_data", mask.buffer.array())
                         putExtra("mask_width", mask.width)
                         putExtra("mask_height", mask.height)
                     }
                     startActivity(intent)
-                } ?: Toast.makeText(this, "No segmentation result yet", Toast.LENGTH_SHORT).show()
+                } ?: Toast.makeText(this, "No mask generated yet", Toast.LENGTH_SHORT).show()
             } ?: Toast.makeText(this, "No image selected", Toast.LENGTH_SHORT).show()
         }
 
@@ -156,6 +146,7 @@ class MainActivity : AppCompatActivity() {
                         val source = ImageDecoder.createSource(contentResolver, uri)
                         ImageDecoder.decodeBitmap(source).copy(Bitmap.Config.ARGB_8888, true)
                     } else {
+                        @Suppress("DEPRECATION")
                         MediaStore.Images.Media.getBitmap(contentResolver, uri)
                     }
                 }
@@ -190,7 +181,6 @@ class MainActivity : AppCompatActivity() {
 
                 val options = SubjectSegmenterOptions.Builder()
                     .enableForegroundBitmap()
-                    .enableForegroundConfidenceMask()
                     .build()
 
                 val segmenter = SubjectSegmentation.getClient(options)
@@ -199,11 +189,10 @@ class MainActivity : AppCompatActivity() {
                     segmenter.process(image).await()
                 }
 
-                segmentationResult = result.foregroundConfidenceMask
-
                 val foregroundBitmap = result.foregroundBitmap
 
                 if (foregroundBitmap != null) {
+                    maskBitmap = foregroundBitmap
                     showSegmentationResult(bitmap, foregroundBitmap)
                     binding.statusText.text = "Subject detected! Tap Edit to adjust."
                     binding.btnEditMask.isEnabled = true
@@ -218,26 +207,27 @@ class MainActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 binding.progressBar.visibility = View.GONE
                 binding.statusText.text = "Segmentation failed: ${e.message}"
-                Toast.makeText(this@MainActivity, "Segmentation failed", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@MainActivity, "Segmentation failed: ${e.message}", Toast.LENGTH_SHORT).show()
                 e.printStackTrace()
             }
         }
     }
 
     private fun showSegmentationResult(original: Bitmap, foreground: Bitmap) {
-        val combined = Bitmap.createBitmap(
-            original.width.coerceAtLeast(foreground.width),
-            original.height.coerceAtLeast(foreground.height),
-            Bitmap.Config.ARGB_8888
-        )
+        val width = original.width.coerceAtLeast(foreground.width)
+        val height = original.height.coerceAtLeast(foreground.height)
 
-        val canvas = Canvas(combined)
-        canvas.drawBitmap(original, 0f, 0f, null)
+        val scaledOriginal = Bitmap.createScaledBitmap(original, width, height, true)
+        val scaledForeground = Bitmap.createScaledBitmap(foreground, width, height, true)
 
-        val paint = Paint().apply {
+        val combined = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(combined)
+        canvas.drawBitmap(scaledOriginal, 0f, 0f, null)
+
+        val paint = android.graphics.Paint().apply {
             alpha = 128
         }
-        canvas.drawBitmap(foreground, 0f, 0f, paint)
+        canvas.drawBitmap(scaledForeground, 0f, 0f, paint)
 
         binding.previewImage.setImageBitmap(combined)
     }
@@ -248,23 +238,14 @@ class MainActivity : AppCompatActivity() {
                 binding.progressBar.visibility = View.VISIBLE
                 binding.statusText.text = "Saving mask..."
 
-                val mask = segmentationResult ?: return@launch
-
+                val mask = maskBitmap ?: return@launch
                 val bitmap = selectedBitmap ?: return@launch
-                val maskBitmap = Bitmap.createBitmap(mask.width, mask.height, Bitmap.Config.ARGB_8888)
-                val pixels = IntArray(mask.width * mask.height)
 
-                for (i in pixels.indices) {
-                    val confidence = mask.buffer.float
-                    val alpha = (confidence * 255).toInt().coerceIn(0, 255)
-                    pixels[i] = Color.argb(alpha, 255, 255, 255)
+                val resizedMask = Bitmap.createScaledBitmap(mask, bitmap.width, bitmap.height, true)
+
+                val savedUri = withContext(Dispatchers.IO) {
+                    saveBitmapToGallery(resizedMask, "depth_mask_${System.currentTimeMillis()}")
                 }
-
-                maskBitmap.setPixels(pixels, 0, mask.width, 0, 0, mask.width, mask.height)
-
-                val resizedMask = Bitmap.createScaledBitmap(maskBitmap, bitmap.width, bitmap.height, true)
-
-                val savedUri = saveBitmapToGallery(resizedMask, "depth_mask_${System.currentTimeMillis()}")
 
                 binding.progressBar.visibility = View.GONE
 
@@ -307,6 +288,7 @@ class MainActivity : AppCompatActivity() {
             }
             uri
         } else {
+            @Suppress("DEPRECATION")
             val path = android.os.Environment.getExternalStoragePublicDirectory(
                 android.os.Environment.DIRECTORY_PICTURES
             )
